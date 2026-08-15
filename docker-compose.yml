@@ -1,0 +1,50 @@
+version: "3.8"
+
+# Local development infrastructure for Voice AI.
+# See docs/ARCHITECTURE.md §10 for the rationale behind each service:
+# Cognito and Speechmatics have no reliable local emulator, so local dev
+# points those two at real free-tier accounts via .env — only DynamoDB and
+# S3 are emulated here. SonarQube is optional, for pre-push local scans.
+
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:2.5.2
+    container_name: voice-ai-dynamodb-local
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    ports:
+      - "8000:8000"
+    working_dir: /home/dynamodblocal
+
+  localstack:
+    image: localstack/localstack:3.4
+    container_name: voice-ai-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3
+      - DEFAULT_REGION=eu-west-1
+      - PERSISTENCE=0
+    volumes:
+      - localstack-data:/var/lib/localstack
+
+  # Optional: SonarQube Community Edition for local pre-push static analysis.
+  # Start with `docker compose --profile sonar up -d sonarqube` and run
+  # `npm run sonar:local` once it's healthy (first boot takes a minute or two).
+  sonarqube:
+    image: sonarqube:community
+    container_name: voice-ai-sonarqube
+    profiles: ["sonar"]
+    ports:
+      - "9000:9000"
+    environment:
+      - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
+    volumes:
+      - sonarqube-data:/opt/sonarqube/data
+      - sonarqube-extensions:/opt/sonarqube/extensions
+      - sonarqube-logs:/opt/sonarqube/logs
+
+volumes:
+  localstack-data:
+  sonarqube-data:
+  sonarqube-extensions:
+  sonarqube-logs:

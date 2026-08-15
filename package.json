@@ -1,0 +1,29 @@
+{
+  "name": "voice-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Voice AI — cloud audio-transcription platform. Monorepo: serverless AWS backend + Nuxt frontend.",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c blue,green \"npm run offline --workspace backend\" \"npm run dev --workspace frontend\"",
+    "test": "npm run test --workspace backend && npm run test --workspace frontend",
+    "test:coverage": "npm run test:coverage --workspace backend && npm run test:coverage --workspace frontend",
+    "test:e2e": "npm run test:e2e --workspace frontend",
+    "lint": "npm run lint --workspace backend && npm run lint --workspace frontend",
+    "lint:fix": "npm run lint:fix --workspace backend && npm run lint:fix --workspace frontend",
+    "typecheck": "npm run typecheck --workspace backend && npm run typecheck --workspace frontend",
+    "sonar:local": "sonar-scanner -Dsonar.host.url=http://localhost:9000",
+    "deploy:backend": "npm run deploy --workspace backend",
+    "deploy:frontend:dev": "npm run generate --workspace frontend && aws s3 sync frontend/.output/public s3://voice-ai-web-dev --delete"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

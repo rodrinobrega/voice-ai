@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  lint-typecheck:
+    name: Lint + typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+
+  test-backend:
+    name: Backend unit tests + coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run test:coverage --workspace backend
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage
+          retention-days: 7
+
+  test-frontend:
+    name: Frontend unit tests + coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run test:coverage --workspace frontend
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage
+          retention-days: 7
+
+  sonar:
+    name: SonarQube Cloud scan (quality gate)
+    runs-on: ubuntu-latest
+    needs: [test-backend, test-frontend]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Sonar needs full history for blame/new-code analysis
+      - uses: actions/download-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage
+      - name: SonarQube Cloud Scan
+        uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+      - name: Quality gate check
+        uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  e2e:
+    name: Cypress E2E (against ephemeral dev stack)
+    runs-on: ubuntu-latest
+    needs: [lint-typecheck]
+    # NOTE: this job assumes an ephemeral `pr-${{ github.event.number }}`
+    # backend stage has already been deployed by a separate `deploy-preview`
+    # job (see docs/ARCHITECTURE.md §11) and its API URL exported as
+    # NUXT_PUBLIC_API_BASE below. Wire that job in once AWS deploy credentials
+    # (OIDC role) are configured — left as a documented follow-up since this
+    # repo's secrets/deployment are intentionally out of scope for now.
+    if: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run test:e2e --workspace frontend
+        env:
+          NUXT_PUBLIC_API_BASE: ${{ vars.PR_STAGE_API_BASE }}
+
+  deploy-dev:
+    name: Deploy backend (dev stage)
+    runs-on: ubuntu-latest
+    needs: [sonar]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      id-token: write # OIDC — no long-lived AWS keys stored as secrets
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-1
+      - run: npm run deploy --workspace backend -- --stage dev
+
+  deploy-prod:
+    name: Deploy backend + frontend (prod stage)
+    runs-on: ubuntu-latest
+    needs: [deploy-dev]
+    environment:
+      name: production # requires manual approval — configure under
+      # Settings → Environments → production → Required reviewers
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-1
+      - run: npm run deploy --workspace backend -- --stage prod
+      - run: npm run generate --workspace frontend
+        env:
+          NUXT_PUBLIC_API_BASE: ${{ vars.PROD_API_BASE }}
+          NUXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ vars.PROD_COGNITO_USER_POOL_ID }}
+          NUXT_PUBLIC_COGNITO_CLIENT_ID: ${{ vars.PROD_COGNITO_CLIENT_ID }}
+          NUXT_PUBLIC_AWS_REGION: eu-west-1
+      - run: aws s3 sync frontend/.output/public s3://voice-ai-web-prod --delete
+      - run: aws cloudfront create-invalidation --distribution-id ${{ vars.PROD_CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"

@@ -1,0 +1,7 @@
+.nuxt
+.output
+dist
+coverage
+node_modules
+cypress/videos
+cypress/screenshots

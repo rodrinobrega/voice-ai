@@ -1,0 +1,17 @@
+node_modules/
+.env
+.env.*
+!.env.example
+dist/
+.output/
+.nuxt/
+coverage/
+.serverless/
+*.log
+.DS_Store
+.idea/
+.vscode/
+cypress/videos/
+cypress/screenshots/
+_to_delete/
+*.zip

@@ -1,0 +1,483 @@
+service: voice-ai-backend
+
+frameworkVersion: '3'
+
+useDotenv: true
+
+plugins:
+  - serverless-esbuild
+  - serverless-offline
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: ${opt:region, 'eu-west-1'}
+  stage: ${opt:stage, 'dev'}
+  memorySize: 256
+  timeout: 29
+  logRetentionInDays: ${self:custom.logRetentionInDays.${self:provider.stage}, 14}
+  httpApi:
+    cors:
+      allowedOrigins:
+        - ${env:WEB_ORIGIN, 'http://localhost:3000'}
+      allowedHeaders:
+        - Content-Type
+        - Authorization
+        - x-webhook-secret
+      allowedMethods:
+        - GET
+        - POST
+        - OPTIONS
+      allowCredentials: false
+    authorizers:
+      cognitoJwtAuthorizer:
+        identitySource: $request.header.Authorization
+        issuerUrl: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}'
+        audience:
+          - !Ref CognitoUserPoolClient
+  environment:
+    STAGE: ${self:provider.stage}
+    DYNAMODB_TABLE: ${self:custom.tableName}
+    AUDIO_BUCKET: ${self:custom.audioBucketName}
+    TRANSCRIPTS_BUCKET: ${self:custom.transcriptsBucketName}
+    COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+    COGNITO_CLIENT_ID: !Ref CognitoUserPoolClient
+    SPEECHMATICS_API_KEY_PARAM: ${self:custom.speechmaticsApiKeyParamName}
+    SPEECHMATICS_WEBHOOK_SECRET_PARAM: ${self:custom.speechmaticsWebhookSecretParamName}
+    SPEECHMATICS_BASE_URL: ${env:SPEECHMATICS_BASE_URL, 'https://asr.api.speechmatics.com/v2'}
+    SPEECHMATICS_RT_URL: ${env:SPEECHMATICS_RT_URL, 'wss://eu2.rt.speechmatics.com/v2'}
+  tracing:
+    apiGateway: true
+    lambda: true
+
+custom:
+  tableName: voice-ai-transcriptions-${self:provider.stage}
+  audioBucketName: voice-ai-audio-${self:provider.stage}
+  transcriptsBucketName: voice-ai-transcripts-${self:provider.stage}
+  webBucketName: voice-ai-web-${self:provider.stage}
+  speechmaticsApiKeyParamName: /voice-ai/${self:provider.stage}/speechmatics-api-key
+  speechmaticsWebhookSecretParamName: /voice-ai/${self:provider.stage}/speechmatics-webhook-secret
+  logRetentionInDays:
+    prod: 90
+    dev: 14
+  esbuild:
+    bundle: true
+    minify: false
+    sourcemap: true
+    target: node20
+    platform: node
+    exclude:
+      - '@aws-sdk/*'
+    define:
+      require.resolve: undefined
+  serverless-offline:
+    httpPort: 3001
+    lambdaPort: 3002
+    noPrependStageInUrl: true
+
+package:
+  individually: true
+
+functions:
+  me:
+    handler: src/handlers/me.handler
+    description: Returns the caller's verified Cognito claims (wiring smoke test).
+    events:
+      - httpApi:
+          path: /me
+          method: get
+          authorizer: cognitoJwtAuthorizer
+
+  getUploadUrl:
+    handler: src/handlers/getUploadUrl.handler
+    description: Creates a transcription record and returns a presigned S3 POST for direct audio upload.
+    events:
+      - httpApi:
+          path: /transcriptions/upload-url
+          method: post
+          authorizer: cognitoJwtAuthorizer
+    iam:
+      role:
+        statements:
+          - Effect: Allow
+            Action:
+              - dynamodb:PutItem
+            Resource: !GetAtt TranscriptionsTable.Arn
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+            Resource: !Sub '${AudioBucket.Arn}/audio/*'
+
+  processUploadedAudio:
+    handler: src/handlers/processUploadedAudio.handler
+    description: S3 ObjectCreated trigger — submits the uploaded audio as a Speechmatics batch job.
+    environment:
+      API_BASE_URL: !GetAtt HttpApi.ApiEndpoint
+    events:
+      - s3:
+          bucket: AudioBucket # logical id of the bucket defined below in resources — created by *this* stack, so no `existing: true`
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: audio/
+    iam:
+      role:
+        statements:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource: !Sub '${AudioBucket.Arn}/audio/*'
+          - Effect: Allow
+            Action:
+              - dynamodb:Query
+              - dynamodb:UpdateItem
+            Resource:
+              - !GetAtt TranscriptionsTable.Arn
+              - !Sub '${TranscriptionsTable.Arn}/index/GSI1'
+          - Effect: Allow
+            Action:
+              - ssm:GetParameter
+            Resource:
+              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsApiKeyParamName}'
+              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsWebhookSecretParamName}'
+
+  speechmaticsWebhook:
+    handler: src/handlers/speechmaticsWebhook.handler
+    description: Speechmatics job-completion callback (shared-secret auth, no Cognito).
+    events:
+      - httpApi:
+          path: /transcriptions/webhook
+          method: post
+    iam:
+      role:
+        statements:
+          - Effect: Allow
+            Action:
+              - ssm:GetParameter
+            Resource:
+              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsApiKeyParamName}'
+              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsWebhookSecretParamName}'
+          - Effect: Allow
+            Action:
+              - dynamodb:Query
+              - dynamodb:UpdateItem
+            Resource:
+              - !GetAtt TranscriptionsTable.Arn
+              - !Sub '${TranscriptionsTable.Arn}/index/GSI1'
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+            Resource: !Sub '${TranscriptsBucket.Arn}/*'
+
+  checkStuckTranscriptions:
+    handler: src/handlers/checkStuckTranscriptions.handler
+    description: Scheduled fallback — reconciles PROCESSING items stuck past the timeout in case a webhook was missed.
+    events:
+      - schedule: rate(5 minutes)
+    iam:
+      role:
+        statements:
+          - Effect: Allow
+            Action:
+              - dynamodb:Scan
+              - dynamodb:UpdateItem
+            Resource: !GetAtt TranscriptionsTable.Arn
+          - Effect: Allow
+            Action:
+              - dynamodb:Query
+            Resource: !Sub '${TranscriptionsTable.Arn}/index/GSI1'
+          - Effect: Allow
+            Action:
+              - ssm:GetParameter
+            Resource:
+              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsApiKeyParamName}'
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+            Resource: !Sub '${TranscriptsBucket.Arn}/*'
+
+  getRealtimeToken:
+    handler: src/handlers/getRealtimeToken.handler
+    description: Mints a short-lived Speechmatics real-time API key for the browser.
+    events:
+      - httpApi:
+          path: /transcriptions/realtime-token
+          method: post
+          authorizer: cognitoJwtAuthorizer
+    iam:
+      role:
+        statements:
+          - Effect: Allow
+            Action:
+              - ssm:GetParameter
+            Resource:
+              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsApiKeyParamName}'
+
+  saveRealtimeTranscript:
+    handler: src/handlers/saveRealtimeTranscript.handler
+    description: Persists a finished real-time transcript and creates its history record.
+    events:
+      - httpApi:
+          path: /transcriptions/realtime
+          method: post
+          authorizer: cognitoJwtAuthorizer
+    iam:
+      role:
+        statements:
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+            Resource: !Sub '${TranscriptsBucket.Arn}/*'
+          - Effect: Allow
+            Action:
+              - dynamodb:PutItem
+            Resource: !GetAtt TranscriptionsTable.Arn
+
+  listTranscriptions:
+    handler: src/handlers/listTranscriptions.handler
+    description: Lists the caller's transcription history, paginated 10 per page.
+    events:
+      - httpApi:
+          path: /transcriptions
+          method: get
+          authorizer: cognitoJwtAuthorizer
+    iam:
+      role:
+        statements:
+          - Effect: Allow
+            Action:
+              - dynamodb:Query
+            Resource: !GetAtt TranscriptionsTable.Arn
+
+  getDownloadUrl:
+    handler: src/handlers/getDownloadUrl.handler
+    description: Returns a presigned download URL for a completed transcript, after an ownership check.
+    events:
+      - httpApi:
+          path: /transcriptions/{id}/download
+          method: get
+          authorizer: cognitoJwtAuthorizer
+    iam:
+      role:
+        statements:
+          - Effect: Allow
+            Action:
+              - dynamodb:Query
+            Resource:
+              - !GetAtt TranscriptionsTable.Arn
+              - !Sub '${TranscriptionsTable.Arn}/index/GSI1'
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource: !Sub '${TranscriptsBucket.Arn}/*'
+
+  getTranscription:
+    handler: src/handlers/getTranscription.handler
+    description: Fetches a single transcription (for status polling), after an ownership check.
+    events:
+      - httpApi:
+          path: /transcriptions/{id}
+          method: get
+          authorizer: cognitoJwtAuthorizer
+    iam:
+      role:
+        statements:
+          - Effect: Allow
+            Action:
+              - dynamodb:Query
+            Resource:
+              - !GetAtt TranscriptionsTable.Arn
+              - !Sub '${TranscriptionsTable.Arn}/index/GSI1'
+
+resources:
+  Resources:
+    # ---------------------------------------------------------------------
+    # Cognito
+    # ---------------------------------------------------------------------
+    CognitoUserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: voice-ai-users-${self:provider.stage}
+        UsernameAttributes:
+          - email
+        AutoVerifiedAttributes:
+          - email
+        Policies:
+          PasswordPolicy:
+            MinimumLength: 12
+            RequireLowercase: true
+            RequireUppercase: true
+            RequireNumbers: true
+            RequireSymbols: true
+        AccountRecoverySetting:
+          RecoveryMechanisms:
+            - Name: verified_email
+              Priority: 1
+        Schema:
+          - Name: email
+            Required: true
+            Mutable: true
+
+    CognitoUserPoolClient:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        ClientName: voice-ai-web-${self:provider.stage}
+        UserPoolId: !Ref CognitoUserPool
+        GenerateSecret: false
+        ExplicitAuthFlows:
+          - ALLOW_USER_SRP_AUTH
+          - ALLOW_REFRESH_TOKEN_AUTH
+        AccessTokenValidity: 1
+        IdTokenValidity: 1
+        RefreshTokenValidity: 30
+        TokenValidityUnits:
+          AccessToken: hours
+          IdToken: hours
+          RefreshToken: days
+        PreventUserExistenceErrors: ENABLED
+
+    # ---------------------------------------------------------------------
+    # DynamoDB — single table, on-demand, PITR on, GSI1 for id-only lookups
+    # ---------------------------------------------------------------------
+    TranscriptionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tableName}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: PK
+            AttributeType: S
+          - AttributeName: SK
+            AttributeType: S
+          - AttributeName: GSI1PK
+            AttributeType: S
+        KeySchema:
+          - AttributeName: PK
+            KeyType: HASH
+          - AttributeName: SK
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: GSI1
+            KeySchema:
+              - AttributeName: GSI1PK
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+        PointInTimeRecoverySpecification:
+          PointInTimeRecoveryEnabled: true
+        SSESpecification:
+          SSEEnabled: true
+
+    # ---------------------------------------------------------------------
+    # S3 — audio (short-lived), transcripts (long-lived), web (static site)
+    # ---------------------------------------------------------------------
+    AudioBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.audioBucketName}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+        CorsConfiguration:
+          CorsRules:
+            - AllowedMethods: [PUT, POST]
+              AllowedOrigins:
+                - ${env:WEB_ORIGIN, 'http://localhost:3000'}
+              AllowedHeaders: ['*']
+              MaxAge: 3000
+        LifecycleConfiguration:
+          Rules:
+            - Id: ExpireAudioAfter30Days
+              Status: Enabled
+              ExpirationInDays: 30
+
+    AudioBucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        Bucket: !Ref AudioBucket
+        PolicyDocument:
+          Statement:
+            - Sid: DenyInsecureTransport
+              Effect: Deny
+              Principal: '*'
+              Action: 's3:*'
+              Resource:
+                - !GetAtt AudioBucket.Arn
+                - !Sub '${AudioBucket.Arn}/*'
+              Condition:
+                Bool:
+                  'aws:SecureTransport': 'false'
+
+    TranscriptsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.transcriptsBucketName}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+        CorsConfiguration:
+          CorsRules:
+            - AllowedMethods: [GET]
+              AllowedOrigins:
+                - ${env:WEB_ORIGIN, 'http://localhost:3000'}
+              AllowedHeaders: ['*']
+              MaxAge: 3000
+
+    TranscriptsBucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        Bucket: !Ref TranscriptsBucket
+        PolicyDocument:
+          Statement:
+            - Sid: DenyInsecureTransport
+              Effect: Deny
+              Principal: '*'
+              Action: 's3:*'
+              Resource:
+                - !GetAtt TranscriptsBucket.Arn
+                - !Sub '${TranscriptsBucket.Arn}/*'
+              Condition:
+                Bool:
+                  'aws:SecureTransport': 'false'
+
+    WebBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.webBucketName}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+
+  Outputs:
+    HttpApiUrl:
+      Description: Base URL of the deployed HTTP API.
+      Value: !GetAtt HttpApi.ApiEndpoint
+    CognitoUserPoolId:
+      Description: Cognito User Pool id (frontend NUXT_PUBLIC_COGNITO_USER_POOL_ID).
+      Value: !Ref CognitoUserPool
+    CognitoUserPoolClientId:
+      Description: Cognito App Client id (frontend NUXT_PUBLIC_COGNITO_CLIENT_ID).
+      Value: !Ref CognitoUserPoolClient
+    AudioBucketName:
+      Value: !Ref AudioBucket
+    TranscriptsBucketName:
+      Value: !Ref TranscriptsBucket
+    WebBucketName:
+      Value: !Ref WebBucket
