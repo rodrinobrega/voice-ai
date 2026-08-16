@@ -23,7 +23,7 @@ docker-compose.yml   Local DynamoDB/S3 emulation + optional local SonarQube
 
 ## Prerequisites
 
-- Node.js ≥ 20, npm ≥ 10
+- Node.js ≥ 22.12 (the Lambda runtime itself targets Node 20.x, but the local tooling — Nuxt/Vite/Nitro — now requires 20.19+ at minimum; 22 LTS is the simplest way to satisfy that with margin), npm ≥ 10
 - Docker (for local DynamoDB Local / LocalStack S3 emulation)
 - An AWS account (only needed to actually deploy or to point local dev at a real dev-stage Cognito User Pool — see `docs/ARCHITECTURE.md` §10 for why Cognito isn't emulated locally)
 - A free [Speechmatics](https://www.speechmatics.com/pricing) account and API key
