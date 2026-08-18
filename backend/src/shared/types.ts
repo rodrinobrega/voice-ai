@@ -40,6 +40,41 @@ export const MAX_REALTIME_TRANSCRIPT_LENGTH = 500_000;
 /** Standard JSON response headers shared by every handler response. */
 export const JSON_HEADERS = { 'Content-Type': 'application/json' } as const;
 
+/**
+ * Language codes offered by the UI. Speechmatics supports ~55 languages; this
+ * is a curated subset kept small enough for a single dropdown. Add codes from
+ * docs.speechmatics.com/introduction/supported-languages as needed.
+ *
+ * `auto` runs Speechmatics' Language Identification and is **batch only** —
+ * the real-time WebSocket API requires an explicit language, hence two lists.
+ */
+export const REALTIME_LANGUAGES = [
+  'en',
+  'es',
+  'pt',
+  'fr',
+  'de',
+  'it',
+  'nl',
+  'ca',
+  'pl',
+  'ru',
+  'ja',
+  'cmn',
+] as const;
+
+export type RealtimeLanguage = (typeof REALTIME_LANGUAGES)[number];
+
+export const BATCH_LANGUAGES = ['auto', ...REALTIME_LANGUAGES] as const;
+
+export type BatchLanguage = (typeof BATCH_LANGUAGES)[number];
+
+/** Uploaded files default to automatic language identification. */
+export const DEFAULT_BATCH_LANGUAGE: BatchLanguage = 'auto';
+
+/** Real-time sessions can't auto-detect, so they need a concrete default. */
+export const DEFAULT_REALTIME_LANGUAGE: RealtimeLanguage = 'en';
+
 export type TranscriptionType = 'FILE' | 'REALTIME';
 
 export type TranscriptionStatus = 'PENDING_UPLOAD' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
@@ -87,6 +122,8 @@ export interface CallerClaims {
 export interface UploadUrlRequestBody {
   filename: string;
   contentType: string;
+  /** Omitted means `DEFAULT_BATCH_LANGUAGE` (auto-detect). */
+  language?: BatchLanguage;
 }
 
 export interface UploadUrlResponseBody {

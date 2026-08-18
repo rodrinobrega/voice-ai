@@ -53,6 +53,40 @@ describe('handlers/getUploadUrl', () => {
     expect(parsed.fields).toEqual({ key: 'audio/user-1/generated-id/song.mp3', policy: 'abc', signature: 'xyz' });
   });
 
+  it('defaults the language to auto-detection when the request omits it', async () => {
+    const event = makeEvent({
+      claims: { sub: 'user-1', email: 'user@example.com' },
+      body: { filename: 'song.mp3', contentType: 'audio/mpeg' },
+    });
+
+    await handler(event);
+
+    expect(mockedPutTranscription).toHaveBeenCalledWith(expect.objectContaining({ language: 'auto' }));
+  });
+
+  it('persists an explicitly requested language on the transcription record', async () => {
+    const event = makeEvent({
+      claims: { sub: 'user-1', email: 'user@example.com' },
+      body: { filename: 'song.mp3', contentType: 'audio/mpeg', language: 'es' },
+    });
+
+    await handler(event);
+
+    expect(mockedPutTranscription).toHaveBeenCalledWith(expect.objectContaining({ language: 'es' }));
+  });
+
+  it('rejects a language code outside the supported set', async () => {
+    const event = makeEvent({
+      claims: { sub: 'user-1', email: 'user@example.com' },
+      body: { filename: 'song.mp3', contentType: 'audio/mpeg', language: 'klingon' },
+    });
+
+    const response = await handler(event);
+
+    expect(response.statusCode).toBe(400);
+    expect(mockedPutTranscription).not.toHaveBeenCalled();
+  });
+
   it('writes a PENDING_UPLOAD DynamoDB item scoped to the caller before presigning', async () => {
     const event = makeEvent({
       claims: { sub: 'user-1', email: 'user@example.com' },

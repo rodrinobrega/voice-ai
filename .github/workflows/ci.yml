@@ -129,7 +129,9 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: eu-west-1
-      - run: npm run deploy --workspace backend -- --stage dev
+      # Wraps `serverless deploy` to pin WEB_ORIGIN to the stage's own
+      # CloudFront domain — without it, CORS is left allowing only localhost.
+      - run: ./scripts/deploy-backend.sh dev
 
   deploy-prod:
     name: Deploy backend + frontend (prod stage)
@@ -152,12 +154,7 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: eu-west-1
-      - run: npm run deploy --workspace backend -- --stage prod
-      - run: npm run generate --workspace frontend
-        env:
-          NUXT_PUBLIC_API_BASE: ${{ vars.PROD_API_BASE }}
-          NUXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ vars.PROD_COGNITO_USER_POOL_ID }}
-          NUXT_PUBLIC_COGNITO_CLIENT_ID: ${{ vars.PROD_COGNITO_CLIENT_ID }}
-          NUXT_PUBLIC_AWS_REGION: eu-west-1
-      - run: aws s3 sync frontend/.output/public s3://voice-ai-web-prod --delete
-      - run: aws cloudfront create-invalidation --distribution-id ${{ vars.PROD_CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
+      - run: ./scripts/deploy-backend.sh prod
+      # Builds against the prod stack's own outputs (API URL, Cognito ids,
+      # bucket, distribution id) — nothing to keep in sync by hand.
+      - run: ./scripts/deploy-frontend.sh prod

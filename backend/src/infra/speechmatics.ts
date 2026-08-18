@@ -6,13 +6,25 @@
 import { Readable } from 'node:stream';
 import { requireEnv } from '../shared/env';
 import { UpstreamServiceError } from '../shared/errors';
-import { REALTIME_TOKEN_TTL_SECONDS } from '../shared/types';
+import { REALTIME_LANGUAGES, REALTIME_TOKEN_TTL_SECONDS } from '../shared/types';
 import { getSecureParam } from './ssm';
 
 export type TranscriptFormat = 'txt' | 'json-v2';
 
+/** Candidate set handed to Language Identification when `language === 'auto'`. */
+const IDENTIFIABLE_LANGUAGES = REALTIME_LANGUAGES;
+
 function baseUrl(): string {
   return requireEnv('SPEECHMATICS_BASE_URL');
+}
+
+/**
+ * Temporary (real-time) keys are minted on the Speechmatics *Management* API
+ * (`https://mp.speechmatics.com/v1`), which is a different host from the batch
+ * ASR API (`https://asr.api.speechmatics.com/v2`) — hence its own env var.
+ */
+function managementBaseUrl(): string {
+  return requireEnv('SPEECHMATICS_MGMT_URL');
 }
 
 async function apiKey(): Promise<string> {
@@ -49,6 +61,8 @@ export interface SubmitBatchJobParams {
   contentType: string;
   webhookUrl: string;
   webhookSecret: string;
+  /** Speechmatics language code, or `auto` for Language Identification. */
+  language: string;
 }
 
 /**
@@ -62,7 +76,14 @@ export async function submitBatchJob(params: SubmitBatchJobParams): Promise<{ jo
 
   const config = {
     type: 'transcription',
-    transcription_config: { language: 'en', operating_point: 'enhanced' },
+    // `language: 'auto'` enables Speechmatics' Language Identification, which
+    // is batch-only and wants ~60s of speech to be reliable. Restricting it to
+    // the codes the UI offers keeps detection from wandering into a language
+    // this app never exposes.
+    transcription_config: { language: params.language, operating_point: 'enhanced' },
+    ...(params.language === 'auto'
+      ? { language_identification_config: { expected_languages: [...IDENTIFIABLE_LANGUAGES] } }
+      : {}),
     notification_config: [
       {
         url: params.webhookUrl,
@@ -74,7 +95,10 @@ export async function submitBatchJob(params: SubmitBatchJobParams): Promise<{ jo
   };
 
   const form = new FormData();
-  form.append('data_file', new Blob([buffer], { type: params.contentType }), params.filename);
+  // `new Uint8Array(buffer)` rather than the Buffer itself: under @types/node 22
+  // a Buffer is `Uint8Array<ArrayBufferLike>`, which doesn't satisfy `BlobPart`
+  // (that requires an `ArrayBuffer`-backed view, not a possibly-shared one).
+  form.append('data_file', new Blob([new Uint8Array(buffer)], { type: params.contentType }), params.filename);
   form.append('config', JSON.stringify(config));
 
   const response = await fetch(`${baseUrl()}/jobs`, {
@@ -105,6 +129,68 @@ export async function getJobTranscript(jobId: string, format: TranscriptFormat):
   return response.text();
 }
 
+interface LanguageIdentificationResult {
+  language: string;
+  confidence: number;
+}
+
+function toIdentificationResult(value: unknown): LanguageIdentificationResult | null {
+  if (!isRecord(value) || typeof value.language !== 'string' || value.language.length === 0) {
+    return null;
+  }
+  return { language: value.language, confidence: typeof value.confidence === 'number' ? value.confidence : 0 };
+}
+
+/**
+ * Reads the language a finished job was actually transcribed in out of its
+ * `json-v2` transcript.
+ *
+ * For a Language Identification job the submitted config still reads `auto`,
+ * and the identified code appears only under
+ * `metadata.language_identification.results`. Speechmatics documents those as
+ * confidence-ordered, but we pick the maximum explicitly rather than depend on
+ * the ordering. For a job submitted with an explicit language, the code is
+ * echoed back on `metadata.transcription_config.language`.
+ *
+ * Returns `undefined` for anything missing or unparseable — not knowing the
+ * language is not worth failing an otherwise successful transcription over.
+ */
+export function extractDetectedLanguage(transcriptJson: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(transcriptJson);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.metadata)) {
+    return undefined;
+  }
+  return identifiedLanguage(parsed.metadata) ?? configuredLanguage(parsed.metadata);
+}
+
+/** Highest-confidence entry of `metadata.language_identification.results`, if any. */
+function identifiedLanguage(metadata: Record<string, unknown>): string | undefined {
+  const results = isRecord(metadata.language_identification) ? metadata.language_identification.results : undefined;
+  if (!Array.isArray(results)) {
+    return undefined;
+  }
+
+  let best: LanguageIdentificationResult | null = null;
+  for (const entry of results) {
+    const result = toIdentificationResult(entry);
+    if (result && (!best || result.confidence > best.confidence)) {
+      best = result;
+    }
+  }
+  return best?.language;
+}
+
+/** The language echoed back on `metadata.transcription_config`, ignoring `auto`. */
+function configuredLanguage(metadata: Record<string, unknown>): string | undefined {
+  const configured = isRecord(metadata.transcription_config) ? metadata.transcription_config.language : undefined;
+  return typeof configured === 'string' && configured.length > 0 && configured !== 'auto' ? configured : undefined;
+}
+
 /** Polls a job's current status directly (used by the stuck-transcription fallback). */
 export async function getJobStatus(jobId: string): Promise<{ status: string }> {
   const key = await apiKey();
@@ -128,7 +214,7 @@ export async function getJobStatus(jobId: string): Promise<{ status: string }> {
  */
 export async function mintRealtimeToken(): Promise<{ token: string }> {
   const key = await apiKey();
-  const response = await fetch(`${baseUrl()}/api_keys?type=rt`, {
+  const response = await fetch(`${managementBaseUrl()}/api_keys?type=rt`, {
     method: 'POST',
     headers: { ...authHeaders(key), 'Content-Type': 'application/json' },
     body: JSON.stringify({ ttl: REALTIME_TOKEN_TTL_SECONDS }),

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useApi } from '~/composables/useApi'
-import { toDisplayError, type DownloadUrlResponse, type Transcription } from '~/types'
+import { languageLabel, toDisplayError, type DownloadUrlResponse, type Transcription } from '~/types'
 
 const props = defineProps<{ transcription: Transcription }>()
 
@@ -25,6 +25,8 @@ const STATUS_STYLES: Record<Transcription['status'], string> = {
 const displayName = computed(
   () => props.transcription.sourceFileName ?? (props.transcription.type === 'REALTIME' ? 'Live recording' : 'Untitled'),
 )
+
+const formattedLanguage = computed(() => languageLabel(props.transcription.language))
 
 const formattedDate = computed(() => {
   return new Date(props.transcription.createdAt).toLocaleString()
@@ -53,6 +55,7 @@ async function onDownload(): Promise<void> {
   <tr class="border-b border-gray-100 last:border-0" data-testid="transcription-row">
     <td class="px-4 py-3 text-sm text-gray-800">{{ displayName }}</td>
     <td class="px-4 py-3 text-sm text-gray-500">{{ transcription.type }}</td>
+    <td class="px-4 py-3 text-sm text-gray-500" data-testid="language-cell">{{ formattedLanguage }}</td>
     <td class="px-4 py-3 text-sm text-gray-500">{{ formattedDate }}</td>
     <td class="px-4 py-3">
       <span class="badge" :class="STATUS_STYLES[transcription.status]" data-testid="status-badge">

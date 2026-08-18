@@ -1,10 +1,8 @@
 import { z } from 'zod';
-import { MAX_PAGE_SIZE, MAX_REALTIME_TRANSCRIPT_LENGTH } from './types';
+import { BATCH_LANGUAGES, MAX_PAGE_SIZE, MAX_REALTIME_TRANSCRIPT_LENGTH, REALTIME_LANGUAGES } from './types';
 
 const FILENAME_MAX_LENGTH = 255;
 const CONTENT_TYPE_MAX_LENGTH = 100;
-const LANGUAGE_CODE_MIN_LENGTH = 2;
-const LANGUAGE_CODE_MAX_LENGTH = 10;
 
 /**
  * Strict `audio/<subtype>` MIME type, e.g. `audio/mpeg`, `audio/wav`,
@@ -25,13 +23,17 @@ export const uploadUrlRequestSchema = z.object({
     .min(1, 'contentType is required')
     .max(CONTENT_TYPE_MAX_LENGTH)
     .regex(AUDIO_CONTENT_TYPE_PATTERN, 'contentType must be a valid "audio/<subtype>" MIME type'),
+  // Closed enum rather than a free-form string: this value is forwarded
+  // verbatim into the Speechmatics job config, so only codes we know the
+  // service accepts should ever get that far.
+  language: z.enum(BATCH_LANGUAGES).optional(),
 });
 export type UploadUrlRequestInput = z.infer<typeof uploadUrlRequestSchema>;
 
 export const realtimeTranscriptRequestSchema = z.object({
   transcriptText: z.string().trim().min(1, 'transcriptText is required').max(MAX_REALTIME_TRANSCRIPT_LENGTH, 'transcriptText is too long'),
   durationSeconds: z.number().nonnegative().optional(),
-  language: z.string().trim().min(LANGUAGE_CODE_MIN_LENGTH).max(LANGUAGE_CODE_MAX_LENGTH).optional(),
+  language: z.enum(REALTIME_LANGUAGES).optional(),
 });
 export type RealtimeTranscriptRequestInput = z.infer<typeof realtimeTranscriptRequestSchema>;
 

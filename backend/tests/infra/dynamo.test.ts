@@ -7,14 +7,20 @@
  */
 process.env.DYNAMODB_TABLE = 'voice-ai-transcriptions-test';
 
-const mockSend = jest.fn();
+// Typed so `mockSend.mock.calls[n][0]` is `unknown` rather than `any`
+// (@typescript-eslint/no-unsafe-member-access).
+const mockSend = jest.fn<Promise<unknown>, [unknown]>();
 
+// Spread the real module: lib-dynamodb's document commands wrap the command
+// classes from this package internally, so replacing the whole module (rather
+// than just the client constructor) breaks `new QueryCommand(...)` at runtime.
 jest.mock('@aws-sdk/client-dynamodb', () => ({
+  ...jest.requireActual<typeof import('@aws-sdk/client-dynamodb')>('@aws-sdk/client-dynamodb'),
   DynamoDBClient: jest.fn().mockImplementation(() => ({})),
 }));
 
 jest.mock('@aws-sdk/lib-dynamodb', () => {
-  const actual = jest.requireActual('@aws-sdk/lib-dynamodb');
+  const actual = jest.requireActual<typeof import('@aws-sdk/lib-dynamodb')>('@aws-sdk/lib-dynamodb');
   return {
     ...actual,
     DynamoDBDocumentClient: { from: jest.fn(() => ({ send: mockSend })) },

@@ -1,9 +1,23 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
+// The handler resolves the secret's SSM parameter *name* from the environment
+// (the SSM client itself is mocked below), so it has to be set before the
+// handler runs — jest's `clearMocks` doesn't touch process.env.
+process.env.SPEECHMATICS_WEBHOOK_SECRET_PARAM = '/voice-ai/test/speechmatics-webhook-secret';
+
 jest.mock('../../src/infra/dynamo');
 jest.mock('../../src/infra/s3');
-jest.mock('../../src/infra/speechmatics');
 jest.mock('../../src/infra/ssm');
+
+// Partial mock: the HTTP-calling exports are stubbed, but `extractDetectedLanguage`
+// is kept real. It is a pure parser over the json-v2 body, and these tests are
+// precisely about which language the handler pulls out of it — a blanket
+// `jest.mock(...)` would replace it with a stub that always returns undefined
+// and the language write-back assertions would pass vacuously.
+jest.mock('../../src/infra/speechmatics', () => ({
+  ...jest.requireActual<typeof import('../../src/infra/speechmatics')>('../../src/infra/speechmatics'),
+  getJobTranscript: jest.fn(),
+}));
 
 import { handler } from '../../src/handlers/speechmaticsWebhook';
 import { getTranscriptionById, updateTranscriptionStatus } from '../../src/infra/dynamo';
@@ -105,6 +119,62 @@ describe('handlers/speechmaticsWebhook', () => {
     expect(mockedGetJobTranscript).toHaveBeenCalledWith('job-1', 'txt');
     expect(mockedGetJobTranscript).toHaveBeenCalledWith('job-1', 'json-v2');
     expect(mockedUpdateStatus).toHaveBeenCalledWith('tx-1', { status: 'COMPLETED', transcriptS3Key: 'user-1/tx-1.txt' });
+  });
+
+  it('writes the identified language back over the stored "auto" when completing', async () => {
+    mockedGetTranscriptionById.mockResolvedValue({ ...processingTranscription, language: 'auto' });
+    mockedGetJobTranscript.mockImplementation((_jobId, format) =>
+      Promise.resolve(
+        format === 'json-v2'
+          ? JSON.stringify({
+              metadata: {
+                transcription_config: { language: 'auto' },
+                language_identification: {
+                  results: [
+                    { language: 'en', confidence: 0.11 },
+                    { language: 'es', confidence: 0.94 },
+                  ],
+                },
+              },
+            })
+          : 'hola mundo',
+      ),
+    );
+
+    const event = makeEvent({
+      headers: { 'x-webhook-secret': REAL_SECRET },
+      query: { transcriptionId: 'tx-1', userId: 'user-1' },
+      body: { id: 'job-1', status: 'done' },
+    });
+
+    await handler(event);
+
+    expect(mockedUpdateStatus).toHaveBeenCalledWith('tx-1', {
+      status: 'COMPLETED',
+      transcriptS3Key: 'user-1/tx-1.txt',
+      language: 'es',
+    });
+  });
+
+  it('leaves the stored language untouched when the transcript metadata carries none', async () => {
+    mockedGetTranscriptionById.mockResolvedValue({ ...processingTranscription, language: 'pt' });
+    mockedGetJobTranscript.mockImplementation((_jobId, format) =>
+      Promise.resolve(format === 'json-v2' ? JSON.stringify({ metadata: {} }) : 'ola mundo'),
+    );
+
+    const event = makeEvent({
+      headers: { 'x-webhook-secret': REAL_SECRET },
+      query: { transcriptionId: 'tx-1', userId: 'user-1' },
+      body: { id: 'job-1', status: 'done' },
+    });
+
+    await handler(event);
+
+    expect(mockedUpdateStatus).toHaveBeenCalledWith('tx-1', {
+      status: 'COMPLETED',
+      transcriptS3Key: 'user-1/tx-1.txt',
+      language: undefined,
+    });
   });
 
   it('marks the transcription FAILED (with a message) on a failure status, without fetching a transcript', async () => {

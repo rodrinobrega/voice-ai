@@ -10,12 +10,13 @@
  */
 import type { S3EventRecord, S3Handler } from 'aws-lambda';
 import { extractIdsFromAudioKey } from '../domain/transcription';
-import { updateTranscriptionStatus } from '../infra/dynamo';
+import { getTranscriptionById, updateTranscriptionStatus } from '../infra/dynamo';
 import { getObjectStream } from '../infra/s3';
 import { submitBatchJob } from '../infra/speechmatics';
 import { getSecureParam } from '../infra/ssm';
 import { requireEnv } from '../shared/env';
 import { errorMessage, logger } from '../shared/logger';
+import { DEFAULT_BATCH_LANGUAGE } from '../shared/types';
 
 const DEFAULT_AUDIO_CONTENT_TYPE = 'audio/mpeg';
 
@@ -32,12 +33,16 @@ function buildWebhookUrl(userId: string, transcriptionId: string): string {
 async function submitJobForKey(bucket: string, key: string, userId: string, transcriptionId: string): Promise<string> {
   const { body, contentType } = await getObjectStream(bucket, key);
   const webhookSecret = await getSecureParam(requireEnv('SPEECHMATICS_WEBHOOK_SECRET_PARAM'));
+  // The language the user picked at upload time lives on the record; fall back
+  // to auto-detection if the item is somehow missing it (older records).
+  const record = await getTranscriptionById(transcriptionId);
   const { jobId } = await submitBatchJob({
     audio: body,
     filename: key.split('/').pop() ?? 'audio',
     contentType: contentType ?? DEFAULT_AUDIO_CONTENT_TYPE,
     webhookUrl: buildWebhookUrl(userId, transcriptionId),
     webhookSecret,
+    language: record?.language ?? DEFAULT_BATCH_LANGUAGE,
   });
   return jobId;
 }

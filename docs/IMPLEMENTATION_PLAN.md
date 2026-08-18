@@ -80,7 +80,7 @@ Estimated total: ~6-7 focused working days, matching the exercise's 7-day window
 
 ## Phase 7 — Stretch items (only if time remains)
 
-- Speaker diarization / language auto-detection surfaced in the UI (Speechmatics supports both).
+- ~~Language selection + auto-detection surfaced in the UI~~ — done: per-transcription language picker, `auto` (Language Identification) as the upload default. Speaker diarization is still open.
 - Transcript export formats beyond plain text (SRT/VTT for subtitles).
 - Dark mode / accessibility pass on the Nuxt UI.
 - Terraform module as an alternative to Serverless Framework, to demonstrate both IaC options from the brief.

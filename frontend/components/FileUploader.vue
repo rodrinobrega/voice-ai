@@ -1,7 +1,16 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from 'vue'
 import { useApi } from '~/composables/useApi'
-import { toDisplayError, type Transcription, type TranscriptionStatus, type UploadUrlResponse } from '~/types'
+import {
+  BATCH_LANGUAGES,
+  DEFAULT_BATCH_LANGUAGE,
+  LANGUAGE_LABELS,
+  toDisplayError,
+  type BatchLanguage,
+  type Transcription,
+  type TranscriptionStatus,
+  type UploadUrlResponse,
+} from '~/types'
 
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024 // 20MB, per ARCHITECTURE.md §4.2
 const AUDIO_MIME_PREFIX = 'audio/'
@@ -19,6 +28,7 @@ const uploadProgress = ref(0)
 const errorMessage = ref<string | null>(null)
 const transcription = ref<Transcription | null>(null)
 const isDragging = ref(false)
+const language = ref<BatchLanguage>(DEFAULT_BATCH_LANGUAGE)
 
 let pollTimeoutHandle: ReturnType<typeof setTimeout> | null = null
 let isDisposed = false
@@ -140,7 +150,7 @@ async function startUpload(): Promise<void> {
     uploadState.value = 'requesting-url'
     const { transcriptionId, uploadUrl, fields } = await api.post<UploadUrlResponse>(
       '/transcriptions/upload-url',
-      { filename: file.name, contentType: file.type },
+      { filename: file.name, contentType: file.type, language: language.value },
     )
 
     uploadState.value = 'uploading'
@@ -184,6 +194,24 @@ defineExpose({ validateFile })
         />
       </label>
       <p class="mt-2 text-xs text-gray-400">Audio files only, up to 20MB.</p>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <label for="upload-language" class="text-sm font-medium text-gray-700">Language</label>
+      <select
+        id="upload-language"
+        v-model="language"
+        class="rounded-md border border-gray-300 px-3 py-2 text-sm"
+        data-testid="language-select"
+        :disabled="uploadState !== 'idle'"
+      >
+        <option v-for="code in BATCH_LANGUAGES" :key="code" :value="code">
+          {{ LANGUAGE_LABELS[code] }}
+        </option>
+      </select>
+      <span v-if="language === 'auto'" class="text-xs text-gray-400">
+        Needs roughly a minute of speech to detect reliably.
+      </span>
     </div>
 
     <p v-if="validationError" class="text-sm text-red-600" data-testid="validation-error">

@@ -4,6 +4,58 @@
  * source of truth for cross-cutting types used by stores/composables/UI.
  */
 
+/**
+ * Language codes offered in the UI, mirroring `backend/src/shared/types.ts`.
+ * `auto` uses Speechmatics' Language Identification, which is **batch only** —
+ * the real-time WebSocket API requires a concrete language.
+ */
+export const REALTIME_LANGUAGES = [
+  'en',
+  'es',
+  'pt',
+  'fr',
+  'de',
+  'it',
+  'nl',
+  'ca',
+  'pl',
+  'ru',
+  'ja',
+  'cmn',
+] as const
+
+export type RealtimeLanguage = (typeof REALTIME_LANGUAGES)[number]
+
+export const BATCH_LANGUAGES = ['auto', ...REALTIME_LANGUAGES] as const
+
+export type BatchLanguage = (typeof BATCH_LANGUAGES)[number]
+
+export const DEFAULT_BATCH_LANGUAGE: BatchLanguage = 'auto'
+export const DEFAULT_REALTIME_LANGUAGE: RealtimeLanguage = 'en'
+
+/** Human-readable names for the dropdowns and the history list. */
+export const LANGUAGE_LABELS: Record<BatchLanguage, string> = {
+  auto: 'Detect automatically',
+  en: 'English',
+  es: 'Spanish',
+  pt: 'Portuguese',
+  fr: 'French',
+  de: 'German',
+  it: 'Italian',
+  nl: 'Dutch',
+  ca: 'Catalan',
+  pl: 'Polish',
+  ru: 'Russian',
+  ja: 'Japanese',
+  cmn: 'Mandarin',
+}
+
+/** Label for a stored `language` value, tolerating codes outside the list. */
+export function languageLabel(code: string | undefined): string {
+  if (!code) return 'Unknown'
+  return LANGUAGE_LABELS[code as BatchLanguage] ?? code
+}
+
 /** How a transcription was produced. */
 export type TranscriptionType = 'FILE' | 'REALTIME'
 
@@ -38,6 +90,13 @@ export interface MeResponse {
 }
 
 /** Response of `POST /transcriptions/upload-url`. */
+export interface UploadUrlRequest {
+  filename: string
+  contentType: string
+  language?: BatchLanguage
+}
+
+/** Response of `POST /transcriptions/upload-url`. */
 export interface UploadUrlResponse {
   transcriptionId: string
   uploadUrl: string
@@ -54,7 +113,7 @@ export interface RealtimeTokenResponse {
 export interface SaveRealtimeTranscriptRequest {
   transcriptText: string
   durationSeconds?: number
-  language?: string
+  language?: RealtimeLanguage
 }
 
 /** Response of `GET /transcriptions?cursor=&limit=10`. */

@@ -18,13 +18,20 @@ Source of truth for names/shapes while implementing. Mirrors `ARCHITECTURE.md`. 
 
 ## REST API (HTTP API, Cognito JWT authorizer on all but `/transcriptions/webhook`)
 - `GET  /me`
-- `POST /transcriptions/upload-url`         → `{ transcriptionId, uploadUrl, fields }`
+- `POST /transcriptions/upload-url`         → body `{ filename, contentType, language? }` → `{ transcriptionId, uploadUrl, fields }`
 - `POST /transcriptions/webhook`            → Speechmatics callback (shared-secret header `x-webhook-secret`)
 - `POST /transcriptions/realtime-token`     → `{ token, url }`
 - `POST /transcriptions/realtime`           → body `{ transcriptText, durationSeconds?, language? }` → creates COMPLETED record
 - `GET  /transcriptions?cursor=&limit=10`   → `{ items: Transcription[], nextCursor: string | null }`
 - `GET  /transcriptions/{id}/download`      → `{ downloadUrl }`
 - `GET  /transcriptions/{id}`               → single item (status polling)
+
+## Transcription language
+`language` is a Speechmatics language code from the curated list in `shared/types.ts` (`en`, `es`, `pt`, `fr`, `de`, `it`, `nl`, `ca`, `pl`, `ru`, `ja`, `cmn`), validated as a closed zod enum on both endpoints that accept it.
+
+Uploads additionally accept `auto` (the default), which turns on Speechmatics' Language Identification, scoped to those same codes via `language_identification_config.expected_languages`. It wants ~60s of speech to be reliable. Real-time has no `auto` — the WebSocket API requires a concrete language, so `pages/record.vue` defaults to `en` and the picker is disabled mid-session.
+
+The chosen code is stored on the transcription record at creation time and read back by `processUploadedAudio` when it submits the batch job.
 
 ## Backend layout
 `backend/src/handlers/*.ts` (thin, one per route above), `backend/src/domain/*.ts` (pure logic: pagination cursor, ownership checks, status transitions), `backend/src/infra/*.ts` (`dynamo.ts`, `s3.ts`, `speechmatics.ts`, `ssm.ts` — AWS SDK v3 adapters), `backend/src/shared/*.ts` (`types.ts`, `schemas.ts` zod, `http.ts` response helpers, `errors.ts`, `logger.ts`).

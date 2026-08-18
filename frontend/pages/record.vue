@@ -4,9 +4,13 @@ import { useApi } from '~/composables/useApi'
 import { useMicRecorder } from '~/composables/useMicRecorder'
 import LiveTranscript from '~/components/LiveTranscript.vue'
 import {
+  DEFAULT_REALTIME_LANGUAGE,
+  LANGUAGE_LABELS,
+  REALTIME_LANGUAGES,
   toDisplayError,
   type AppError,
   type RealtimeConnectionState,
+  type RealtimeLanguage,
   type RealtimeTokenResponse,
   type Transcription,
 } from '~/types'
@@ -29,11 +33,13 @@ interface SpeechmaticsMessage {
   results?: SpeechmaticsResult[]
 }
 
-const REALTIME_LANGUAGE = 'en'
 const MAX_PARTIAL_DELAY_SECONDS = 2
 
 const api = useApi()
 
+// Speechmatics' real-time API has no `auto` option (Language Identification is
+// batch-only), so a live session must be told which language to expect.
+const language = ref<RealtimeLanguage>(DEFAULT_REALTIME_LANGUAGE)
 const connectionState = ref<RealtimeConnectionState>('idle')
 const partialText = ref('')
 const finalSegments = ref<string[]>([])
@@ -123,7 +129,7 @@ function buildStartRecognitionMessage(): Record<string, unknown> {
     message: 'StartRecognition',
     audio_format: { type: 'raw', encoding: 'pcm_s16le', sample_rate: micRecorder.sampleRate },
     transcription_config: {
-      language: REALTIME_LANGUAGE,
+      language: language.value,
       enable_partials: true,
       max_delay: MAX_PARTIAL_DELAY_SECONDS,
     },
@@ -248,6 +254,7 @@ async function saveTranscript(): Promise<void> {
     const saved = await api.post<Transcription>('/transcriptions/realtime', {
       transcriptText,
       durationSeconds,
+      language: language.value,
     })
     if (isDisposed) return
     savedTranscription.value = saved
@@ -278,6 +285,22 @@ onUnmounted(() => {
 <template>
   <div class="space-y-6">
     <h1 class="text-2xl font-bold text-gray-900">Record</h1>
+
+    <div class="flex items-center gap-3">
+      <label for="record-language" class="text-sm font-medium text-gray-700">Language</label>
+      <select
+        id="record-language"
+        v-model="language"
+        class="rounded-md border border-gray-300 px-3 py-2 text-sm"
+        data-testid="record-language-select"
+        :disabled="connectionState !== 'idle'"
+      >
+        <option v-for="code in REALTIME_LANGUAGES" :key="code" :value="code">
+          {{ LANGUAGE_LABELS[code] }}
+        </option>
+      </select>
+      <span class="text-xs text-gray-400">Live sessions can't auto-detect.</span>
+    </div>
 
     <div class="flex gap-3">
       <button

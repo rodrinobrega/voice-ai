@@ -2,7 +2,9 @@
 .nuxt/
 .output/
 .data/
-dist/
+# No trailing slash — see the root .gitignore: `dist/` would not match a
+# `dist` symlink pointing into .output/.
+dist
 
 # Node
 node_modules/

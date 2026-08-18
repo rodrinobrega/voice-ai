@@ -75,9 +75,25 @@ See `sonar-project.properties` for project configuration and quality gate expect
 
 ```bash
 npm run deploy:backend            # serverless deploy --stage dev (default)
+SPEECHMATICS_API_KEY=... npm run bootstrap:dev
+                                  # stores the Speechmatics key + a generated webhook
+                                  # secret in SSM, then updates the keys it owns in
+                                  # frontend/.env + backend/.env (WEB_ORIGIN) from the
+                                  # stack outputs, leaving your other settings alone
+npm run deploy:frontend:dev       # nuxt generate + S3 sync + CloudFront invalidation
 STAGE=prod npm run deploy:backend # deploy the prod stage
-npm run deploy:frontend:dev       # nuxt generate + sync to S3 (dev)
 ```
+
+The first backend deploy of a stage creates the CloudFront distribution, so its
+domain isn't known until the stack exists. `deploy:backend` handles that itself
+(`scripts/deploy-backend.sh`): it reads the stack's `WebUrl` output, deploys with
+`WEB_ORIGIN` set to it, and — only on the first-ever deploy, where the
+distribution didn't exist yet — deploys a second time so API Gateway and S3 CORS
+accept the new origin. Steady-state deploys are a single pass.
+
+The SPA is served from CloudFront over a private S3 bucket (Origin Access
+Control); the bucket itself is never public. The stack's `WebUrl` output is the
+app's URL.
 
 In CI, `main` pushes auto-deploy to `dev`; promotion to `prod` requires a manual approval gate (GitHub Environments) — see the `deploy-prod` job in `.github/workflows/ci.yml`. AWS credentials are assumed via GitHub OIDC (`AWS_DEPLOY_ROLE_ARN` secret), not long-lived keys.
 

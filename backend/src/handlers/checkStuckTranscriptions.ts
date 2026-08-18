@@ -8,7 +8,7 @@
 import type { ScheduledHandler } from 'aws-lambda';
 import { queryStuckProcessing, updateTranscriptionStatus } from '../infra/dynamo';
 import { persistTranscriptOutputs } from '../infra/s3';
-import { getJobStatus, getJobTranscript } from '../infra/speechmatics';
+import { extractDetectedLanguage, getJobStatus, getJobTranscript } from '../infra/speechmatics';
 import { errorMessage, logger } from '../shared/logger';
 import { STUCK_PROCESSING_THRESHOLD_MINUTES, Transcription } from '../shared/types';
 
@@ -23,7 +23,17 @@ function thresholdIso(): string {
 async function completeFromFallback(transcription: Transcription, jobId: string): Promise<void> {
   const [text, json] = await Promise.all([getJobTranscript(jobId, 'txt'), getJobTranscript(jobId, 'json-v2')]);
   const { textKey } = await persistTranscriptOutputs(transcription.userId, transcription.transcriptionId, text, json);
-  await updateTranscriptionStatus(transcription.transcriptionId, { status: 'COMPLETED', transcriptS3Key: textKey });
+
+  // Same write-back as the webhook path: a record submitted with `auto` holds
+  // the literal 'auto' until the identified language is copied off the json-v2
+  // metadata. `undefined` leaves the stored value untouched.
+  const detected = extractDetectedLanguage(json);
+
+  await updateTranscriptionStatus(transcription.transcriptionId, {
+    status: 'COMPLETED',
+    transcriptS3Key: textKey,
+    language: detected === transcription.language ? undefined : detected,
+  });
 }
 
 async function reconcileOne(transcription: Transcription): Promise<void> {

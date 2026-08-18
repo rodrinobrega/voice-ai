@@ -11,7 +11,7 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from '
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { getTranscriptionById, updateTranscriptionStatus } from '../infra/dynamo';
 import { persistTranscriptOutputs } from '../infra/s3';
-import { getJobTranscript } from '../infra/speechmatics';
+import { extractDetectedLanguage, getJobTranscript } from '../infra/speechmatics';
 import { getSecureParam } from '../infra/ssm';
 import { requireEnv } from '../shared/env';
 import { errorToResponse, UnauthorizedError } from '../shared/errors';
@@ -47,10 +47,23 @@ async function assertWebhookSecret(event: APIGatewayProxyEventV2): Promise<void>
   }
 }
 
-async function completeTranscription(userId: string, transcriptionId: string, jobId: string): Promise<void> {
+async function completeTranscription(transcription: Transcription, jobId: string): Promise<void> {
+  const { userId, transcriptionId } = transcription;
   const [text, json] = await Promise.all([getJobTranscript(jobId, 'txt'), getJobTranscript(jobId, 'json-v2')]);
   const { textKey } = await persistTranscriptOutputs(userId, transcriptionId, text, json);
-  await updateTranscriptionStatus(transcriptionId, { status: 'COMPLETED', transcriptS3Key: textKey });
+
+  // A record submitted with `auto` still holds the literal 'auto' the user
+  // picked — the language Language Identification actually settled on exists
+  // only in the json-v2 metadata. Write it back here, or the history row would
+  // read "Detect automatically" for the rest of the record's life.
+  const detected = extractDetectedLanguage(json);
+
+  await updateTranscriptionStatus(transcriptionId, {
+    status: 'COMPLETED',
+    transcriptS3Key: textKey,
+    // `undefined` leaves the stored value untouched (see `buildUpdateExpression`).
+    language: detected === transcription.language ? undefined : detected,
+  });
 }
 
 /**
@@ -83,7 +96,7 @@ async function resolveTranscription(transcriptionId: string, userId: string, job
 
 async function applyWebhookOutcome(transcription: Transcription, status: string, jobId: string): Promise<void> {
   if (SUCCESS_STATUSES.has(status)) {
-    await completeTranscription(transcription.userId, transcription.transcriptionId, jobId);
+    await completeTranscription(transcription, jobId);
   } else if (FAILURE_STATUSES.has(status)) {
     await updateTranscriptionStatus(transcription.transcriptionId, { status: 'FAILED', errorMessage: `Speechmatics job ${status}` });
   } else {
