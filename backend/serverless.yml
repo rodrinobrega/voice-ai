@@ -6,6 +6,7 @@ useDotenv: true
 
 plugins:
   - serverless-esbuild
+  - serverless-iam-roles-per-function
   - serverless-offline
 
 provider:
@@ -45,7 +46,8 @@ provider:
     SPEECHMATICS_API_KEY_PARAM: ${self:custom.speechmaticsApiKeyParamName}
     SPEECHMATICS_WEBHOOK_SECRET_PARAM: ${self:custom.speechmaticsWebhookSecretParamName}
     SPEECHMATICS_BASE_URL: ${env:SPEECHMATICS_BASE_URL, 'https://asr.api.speechmatics.com/v2'}
-    SPEECHMATICS_RT_URL: ${env:SPEECHMATICS_RT_URL, 'wss://eu2.rt.speechmatics.com/v2'}
+    SPEECHMATICS_MGMT_URL: ${env:SPEECHMATICS_MGMT_URL, 'https://mp.speechmatics.com/v1'}
+    SPEECHMATICS_RT_URL: ${env:SPEECHMATICS_RT_URL, 'wss://eu.rt.speechmatics.com/v2'}
   tracing:
     apiGateway: true
     lambda: true
@@ -55,6 +57,12 @@ custom:
   audioBucketName: voice-ai-audio-${self:provider.stage}
   transcriptsBucketName: voice-ai-transcripts-${self:provider.stage}
   webBucketName: voice-ai-web-${self:provider.stage}
+  # Deterministic ARNs. Built from the bucket *names* rather than !GetAtt so the
+  # per-function roles never depend on the bucket resource — AudioBucket has to
+  # DependsOn the S3->Lambda permission (for its NotificationConfiguration), and
+  # a GetAtt here would close that into a circular dependency.
+  audioBucketArn: arn:aws:s3:::${self:custom.audioBucketName}
+  transcriptsBucketArn: arn:aws:s3:::${self:custom.transcriptsBucketName}
   speechmaticsApiKeyParamName: /voice-ai/${self:provider.stage}/speechmatics-api-key
   speechmaticsWebhookSecretParamName: /voice-ai/${self:provider.stage}/speechmatics-webhook-secret
   logRetentionInDays:
@@ -96,49 +104,45 @@ functions:
           path: /transcriptions/upload-url
           method: post
           authorizer: cognitoJwtAuthorizer
-    iam:
-      role:
-        statements:
-          - Effect: Allow
-            Action:
-              - dynamodb:PutItem
-            Resource: !GetAtt TranscriptionsTable.Arn
-          - Effect: Allow
-            Action:
-              - s3:PutObject
-            Resource: !Sub '${AudioBucket.Arn}/audio/*'
+    iamRoleStatementsName: voice-ai-${self:provider.stage}-getUploadUrl-role
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:PutItem
+        Resource: !GetAtt TranscriptionsTable.Arn
+      - Effect: Allow
+        Action:
+          - s3:PutObject
+        Resource: ${self:custom.audioBucketArn}/audio/*
 
   processUploadedAudio:
     handler: src/handlers/processUploadedAudio.handler
     description: S3 ObjectCreated trigger — submits the uploaded audio as a Speechmatics batch job.
     environment:
       API_BASE_URL: !GetAtt HttpApi.ApiEndpoint
-    events:
-      - s3:
-          bucket: AudioBucket # logical id of the bucket defined below in resources — created by *this* stack, so no `existing: true`
-          event: s3:ObjectCreated:*
-          rules:
-            - prefix: audio/
-    iam:
-      role:
-        statements:
-          - Effect: Allow
-            Action:
-              - s3:GetObject
-            Resource: !Sub '${AudioBucket.Arn}/audio/*'
-          - Effect: Allow
-            Action:
-              - dynamodb:Query
-              - dynamodb:UpdateItem
-            Resource:
-              - !GetAtt TranscriptionsTable.Arn
-              - !Sub '${TranscriptionsTable.Arn}/index/GSI1'
-          - Effect: Allow
-            Action:
-              - ssm:GetParameter
-            Resource:
-              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsApiKeyParamName}'
-              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsWebhookSecretParamName}'
+    # The S3 notification is wired in `resources` (AudioBucket.NotificationConfiguration
+    # + ProcessUploadedAudioS3Permission) rather than with a `s3:` event here: the
+    # framework's `s3` event expects a bucket *name* and creates the bucket itself,
+    # which cannot be combined with a fully specified AWS::S3::Bucket resource.
+    iamRoleStatementsName: voice-ai-${self:provider.stage}-processUploadedAudio-role
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - s3:GetObject
+        Resource: ${self:custom.audioBucketArn}/audio/*
+      - Effect: Allow
+        Action:
+          - dynamodb:Query
+          - dynamodb:UpdateItem
+        Resource:
+          - !GetAtt TranscriptionsTable.Arn
+          - !Sub '${TranscriptionsTable.Arn}/index/GSI1'
+      - Effect: Allow
+        Action:
+          - ssm:GetParameter
+        Resource:
+          - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsApiKeyParamName}'
+          - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsWebhookSecretParamName}'
 
   speechmaticsWebhook:
     handler: src/handlers/speechmaticsWebhook.handler
@@ -147,53 +151,51 @@ functions:
       - httpApi:
           path: /transcriptions/webhook
           method: post
-    iam:
-      role:
-        statements:
-          - Effect: Allow
-            Action:
-              - ssm:GetParameter
-            Resource:
-              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsApiKeyParamName}'
-              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsWebhookSecretParamName}'
-          - Effect: Allow
-            Action:
-              - dynamodb:Query
-              - dynamodb:UpdateItem
-            Resource:
-              - !GetAtt TranscriptionsTable.Arn
-              - !Sub '${TranscriptionsTable.Arn}/index/GSI1'
-          - Effect: Allow
-            Action:
-              - s3:PutObject
-            Resource: !Sub '${TranscriptsBucket.Arn}/*'
+    iamRoleStatementsName: voice-ai-${self:provider.stage}-speechmaticsWebhook-role
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - ssm:GetParameter
+        Resource:
+          - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsApiKeyParamName}'
+          - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsWebhookSecretParamName}'
+      - Effect: Allow
+        Action:
+          - dynamodb:Query
+          - dynamodb:UpdateItem
+        Resource:
+          - !GetAtt TranscriptionsTable.Arn
+          - !Sub '${TranscriptionsTable.Arn}/index/GSI1'
+      - Effect: Allow
+        Action:
+          - s3:PutObject
+        Resource: ${self:custom.transcriptsBucketArn}/*
 
   checkStuckTranscriptions:
     handler: src/handlers/checkStuckTranscriptions.handler
     description: Scheduled fallback — reconciles PROCESSING items stuck past the timeout in case a webhook was missed.
     events:
       - schedule: rate(5 minutes)
-    iam:
-      role:
-        statements:
-          - Effect: Allow
-            Action:
-              - dynamodb:Scan
-              - dynamodb:UpdateItem
-            Resource: !GetAtt TranscriptionsTable.Arn
-          - Effect: Allow
-            Action:
-              - dynamodb:Query
-            Resource: !Sub '${TranscriptionsTable.Arn}/index/GSI1'
-          - Effect: Allow
-            Action:
-              - ssm:GetParameter
-            Resource:
-              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsApiKeyParamName}'
-          - Effect: Allow
-            Action:
-              - s3:PutObject
-            Resource: !Sub '${TranscriptsBucket.Arn}/*'
+    iamRoleStatementsName: voice-ai-${self:provider.stage}-checkStuck-role
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Scan
+          - dynamodb:UpdateItem
+        Resource: !GetAtt TranscriptionsTable.Arn
+      - Effect: Allow
+        Action:
+          - dynamodb:Query
+        Resource: !Sub '${TranscriptionsTable.Arn}/index/GSI1'
+      - Effect: Allow
+        Action:
+          - ssm:GetParameter
+        Resource:
+          - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsApiKeyParamName}'
+      - Effect: Allow
+        Action:
+          - s3:PutObject
+        Resource: ${self:custom.transcriptsBucketArn}/*
 
   getRealtimeToken:
     handler: src/handlers/getRealtimeToken.handler
@@ -203,14 +205,13 @@ functions:
           path: /transcriptions/realtime-token
           method: post
           authorizer: cognitoJwtAuthorizer
-    iam:
-      role:
-        statements:
-          - Effect: Allow
-            Action:
-              - ssm:GetParameter
-            Resource:
-              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsApiKeyParamName}'
+    iamRoleStatementsName: voice-ai-${self:provider.stage}-getRealtimeToken-role
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - ssm:GetParameter
+        Resource:
+          - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${self:custom.speechmaticsApiKeyParamName}'
 
   saveRealtimeTranscript:
     handler: src/handlers/saveRealtimeTranscript.handler
@@ -220,17 +221,16 @@ functions:
           path: /transcriptions/realtime
           method: post
           authorizer: cognitoJwtAuthorizer
-    iam:
-      role:
-        statements:
-          - Effect: Allow
-            Action:
-              - s3:PutObject
-            Resource: !Sub '${TranscriptsBucket.Arn}/*'
-          - Effect: Allow
-            Action:
-              - dynamodb:PutItem
-            Resource: !GetAtt TranscriptionsTable.Arn
+    iamRoleStatementsName: voice-ai-${self:provider.stage}-saveRealtime-role
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - s3:PutObject
+        Resource: ${self:custom.transcriptsBucketArn}/*
+      - Effect: Allow
+        Action:
+          - dynamodb:PutItem
+        Resource: !GetAtt TranscriptionsTable.Arn
 
   listTranscriptions:
     handler: src/handlers/listTranscriptions.handler
@@ -240,13 +240,12 @@ functions:
           path: /transcriptions
           method: get
           authorizer: cognitoJwtAuthorizer
-    iam:
-      role:
-        statements:
-          - Effect: Allow
-            Action:
-              - dynamodb:Query
-            Resource: !GetAtt TranscriptionsTable.Arn
+    iamRoleStatementsName: voice-ai-${self:provider.stage}-listTranscriptions-role
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Query
+        Resource: !GetAtt TranscriptionsTable.Arn
 
   getDownloadUrl:
     handler: src/handlers/getDownloadUrl.handler
@@ -256,19 +255,18 @@ functions:
           path: /transcriptions/{id}/download
           method: get
           authorizer: cognitoJwtAuthorizer
-    iam:
-      role:
-        statements:
-          - Effect: Allow
-            Action:
-              - dynamodb:Query
-            Resource:
-              - !GetAtt TranscriptionsTable.Arn
-              - !Sub '${TranscriptionsTable.Arn}/index/GSI1'
-          - Effect: Allow
-            Action:
-              - s3:GetObject
-            Resource: !Sub '${TranscriptsBucket.Arn}/*'
+    iamRoleStatementsName: voice-ai-${self:provider.stage}-getDownloadUrl-role
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Query
+        Resource:
+          - !GetAtt TranscriptionsTable.Arn
+          - !Sub '${TranscriptionsTable.Arn}/index/GSI1'
+      - Effect: Allow
+        Action:
+          - s3:GetObject
+        Resource: ${self:custom.transcriptsBucketArn}/*
 
   getTranscription:
     handler: src/handlers/getTranscription.handler
@@ -278,15 +276,14 @@ functions:
           path: /transcriptions/{id}
           method: get
           authorizer: cognitoJwtAuthorizer
-    iam:
-      role:
-        statements:
-          - Effect: Allow
-            Action:
-              - dynamodb:Query
-            Resource:
-              - !GetAtt TranscriptionsTable.Arn
-              - !Sub '${TranscriptionsTable.Arn}/index/GSI1'
+    iamRoleStatementsName: voice-ai-${self:provider.stage}-getTranscription-role
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:Query
+        Resource:
+          - !GetAtt TranscriptionsTable.Arn
+          - !Sub '${TranscriptionsTable.Arn}/index/GSI1'
 
 resources:
   Resources:
@@ -364,14 +361,28 @@ resources:
               ProjectionType: ALL
         PointInTimeRecoverySpecification:
           PointInTimeRecoveryEnabled: true
-        SSESpecification:
-          SSEEnabled: true
+        # No SSESpecification: DynamoDB always encrypts at rest with an AWS-owned
+        # key at no cost. `SSEEnabled: true` would instead select the AWS-managed
+        # KMS key (aws/dynamodb) — billable, and needs KMS rights the deploy user
+        # deliberately does not have. Same encryption guarantee either way.
 
     # ---------------------------------------------------------------------
     # S3 — audio (short-lived), transcripts (long-lived), web (static site)
     # ---------------------------------------------------------------------
+    ProcessUploadedAudioS3Permission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        FunctionName: !GetAtt ProcessUploadedAudioLambdaFunction.Arn
+        Action: lambda:InvokeFunction
+        Principal: s3.amazonaws.com
+        SourceAccount: !Ref AWS::AccountId
+        # Literal ARN, not !GetAtt AudioBucket.Arn — the bucket depends on this
+        # permission, so referencing it here would be circular.
+        SourceArn: ${self:custom.audioBucketArn}
+
     AudioBucket:
       Type: AWS::S3::Bucket
+      DependsOn: ProcessUploadedAudioS3Permission
       Properties:
         BucketName: ${self:custom.audioBucketName}
         PublicAccessBlockConfiguration:
@@ -395,6 +406,15 @@ resources:
             - Id: ExpireAudioAfter30Days
               Status: Enabled
               ExpirationInDays: 30
+        NotificationConfiguration:
+          LambdaConfigurations:
+            - Event: 's3:ObjectCreated:*'
+              Filter:
+                S3Key:
+                  Rules:
+                    - Name: prefix
+                      Value: audio/
+              Function: !GetAtt ProcessUploadedAudioLambdaFunction.Arn
 
     AudioBucketPolicy:
       Type: AWS::S3::BucketPolicy
@@ -465,10 +485,96 @@ resources:
             - ServerSideEncryptionByDefault:
                 SSEAlgorithm: AES256
 
+    # ---------------------------------------------------------------------
+    # CloudFront — serves the static SPA out of the private WebBucket.
+    # The bucket stays fully private; CloudFront reads it through an Origin
+    # Access Control (OAC, the successor to OAI) and is the only principal
+    # the bucket policy trusts.
+    # ---------------------------------------------------------------------
+    WebOriginAccessControl:
+      Type: AWS::CloudFront::OriginAccessControl
+      Properties:
+        OriginAccessControlConfig:
+          Name: voice-ai-web-${self:provider.stage}
+          Description: OAC for the Voice AI web bucket (${self:provider.stage})
+          OriginAccessControlOriginType: s3
+          SigningBehavior: always
+          SigningProtocol: sigv4
+
+    WebDistribution:
+      Type: AWS::CloudFront::Distribution
+      Properties:
+        DistributionConfig:
+          Enabled: true
+          Comment: Voice AI SPA (${self:provider.stage})
+          DefaultRootObject: index.html
+          HttpVersion: http2and3
+          IPV6Enabled: true
+          # PriceClass_100 = NA + EU edge locations only; cheapest tier that
+          # still covers the users this stage is for.
+          PriceClass: PriceClass_100
+          Origins:
+            - Id: WebBucketOrigin
+              DomainName: !GetAtt WebBucket.RegionalDomainName
+              OriginAccessControlId: !GetAtt WebOriginAccessControl.Id
+              # Required even with OAC: an empty OAI string tells CloudFront
+              # this is an S3 (not custom) origin.
+              S3OriginConfig:
+                OriginAccessIdentity: ''
+          DefaultCacheBehavior:
+            TargetOriginId: WebBucketOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            # AWS managed policies: CachingOptimized + SecurityHeadersPolicy
+            # (HSTS, X-Content-Type-Options, Referrer-Policy, frame-deny).
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+            ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
+          # SPA routing: client-side routes have no S3 object behind them, and
+          # a private bucket answers unknown keys with 403 rather than 404.
+          CustomErrorResponses:
+            - ErrorCode: 403
+              ResponseCode: 200
+              ResponsePagePath: /index.html
+              ErrorCachingMinTTL: 10
+            - ErrorCode: 404
+              ResponseCode: 200
+              ResponsePagePath: /index.html
+              ErrorCachingMinTTL: 10
+          ViewerCertificate:
+            CloudFrontDefaultCertificate: true
+
+    WebBucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        Bucket: !Ref WebBucket
+        PolicyDocument:
+          Statement:
+            - Sid: AllowCloudFrontRead
+              Effect: Allow
+              Principal:
+                Service: cloudfront.amazonaws.com
+              Action: 's3:GetObject'
+              Resource: !Sub '${WebBucket.Arn}/*'
+              Condition:
+                StringEquals:
+                  'AWS:SourceArn': !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${WebDistribution}'
+            - Sid: DenyInsecureTransport
+              Effect: Deny
+              Principal: '*'
+              Action: 's3:*'
+              Resource:
+                - !GetAtt WebBucket.Arn
+                - !Sub '${WebBucket.Arn}/*'
+              Condition:
+                Bool:
+                  'aws:SecureTransport': 'false'
+
   Outputs:
-    HttpApiUrl:
-      Description: Base URL of the deployed HTTP API.
-      Value: !GetAtt HttpApi.ApiEndpoint
+    # NB: no HttpApiUrl output here — the framework already emits one for the
+    # httpApi event, and a same-named block gets deep-merged into it, producing
+    # a Value with both Fn::Join and Fn::GetAtt keys (invalid: must be a String).
     CognitoUserPoolId:
       Description: Cognito User Pool id (frontend NUXT_PUBLIC_COGNITO_USER_POOL_ID).
       Value: !Ref CognitoUserPool
@@ -481,3 +587,9 @@ resources:
       Value: !Ref TranscriptsBucket
     WebBucketName:
       Value: !Ref WebBucket
+    WebDistributionId:
+      Description: CloudFront distribution id (for cache invalidation on deploy).
+      Value: !Ref WebDistribution
+    WebUrl:
+      Description: Public URL of the deployed SPA — also the value WEB_ORIGIN must hold for CORS.
+      Value: !Sub 'https://${WebDistribution.DomainName}'

@@ -81,6 +81,7 @@ export interface NewFileTranscriptionInput {
   sourceFileName: string;
   audioS3Key: string;
   now: string;
+  language?: string;
 }
 
 /** Builds a brand-new `FILE` transcription in `PENDING_UPLOAD` state. */
@@ -92,6 +93,7 @@ export function createFileTranscription(input: NewFileTranscriptionInput): Trans
     status: 'PENDING_UPLOAD',
     sourceFileName: input.sourceFileName,
     audioS3Key: input.audioS3Key,
+    language: input.language,
     createdAt: input.now,
     updatedAt: input.now,
   };

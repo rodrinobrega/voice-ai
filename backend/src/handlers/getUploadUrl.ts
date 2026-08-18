@@ -13,7 +13,7 @@ import { errorToResponse } from '../shared/errors';
 import { getCallerClaims, ok, parseBody } from '../shared/http';
 import { errorMessage, logger } from '../shared/logger';
 import { uploadUrlRequestSchema } from '../shared/schemas';
-import { UploadUrlResponseBody } from '../shared/types';
+import { DEFAULT_BATCH_LANGUAGE, UploadUrlResponseBody } from '../shared/types';
 
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
@@ -32,6 +32,7 @@ export async function handler(
       sourceFileName: body.filename,
       audioS3Key,
       now,
+      language: body.language ?? DEFAULT_BATCH_LANGUAGE,
     });
     await putTranscription(transcription);
 

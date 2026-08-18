@@ -24,6 +24,7 @@ jest.mock('amazon-cognito-identity-js', () => ({
     authenticateUser: mockAuthenticateUser,
   })),
   AuthenticationDetails: jest.fn(),
+  CognitoUserAttribute: jest.fn().mockImplementation((attr) => attr),
 }))
 
 const fakeCognitoSession = {

@@ -15,6 +15,7 @@ defineProps<{
         <tr class="border-b border-gray-200 text-xs uppercase tracking-wide text-gray-400">
           <th class="px-4 py-2 font-medium">Name</th>
           <th class="px-4 py-2 font-medium">Type</th>
+          <th class="px-4 py-2 font-medium">Language</th>
           <th class="px-4 py-2 font-medium">Created</th>
           <th class="px-4 py-2 font-medium">Status</th>
           <th class="px-4 py-2 font-medium text-right">Actions</th>

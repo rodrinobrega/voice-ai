@@ -1,6 +1,7 @@
 import {
   AuthenticationDetails,
   CognitoUser,
+  CognitoUserAttribute,
   CognitoUserPool,
   type CognitoUserSession,
   type ICognitoUserPoolData,
@@ -56,7 +57,7 @@ export function useAuth(): AuthApi {
 
   function register(email: string, password: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const attributeList = [{ Name: 'email', Value: email }]
+      const attributeList = [new CognitoUserAttribute({ Name: 'email', Value: email })]
       getUserPool().signUp(email, password, attributeList, [], (err) => {
         if (err) {
           reject(toAppError(err))

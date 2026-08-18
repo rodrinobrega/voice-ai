@@ -1,0 +1,162 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CloudFormationStacks",
+      "Effect": "Allow",
+      "Action": "cloudformation:*",
+      "Resource": "arn:aws:cloudformation:*:228619515491:stack/voice-ai-*/*"
+    },
+    {
+      "Sid": "CloudFormationGlobalReads",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:ValidateTemplate",
+        "cloudformation:CreateUploadBucket",
+        "cloudformation:ListStacks",
+        "cloudformation:ListExports",
+        "cloudformation:DescribeStackDriftDetectionStatus"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ProjectBuckets",
+      "Effect": "Allow",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::voice-ai-backend-*",
+        "arn:aws:s3:::voice-ai-backend-*/*",
+        "arn:aws:s3:::voice-ai-audio-*",
+        "arn:aws:s3:::voice-ai-audio-*/*",
+        "arn:aws:s3:::voice-ai-transcripts-*",
+        "arn:aws:s3:::voice-ai-transcripts-*/*",
+        "arn:aws:s3:::voice-ai-web-*",
+        "arn:aws:s3:::voice-ai-web-*/*",
+        "arn:aws:s3:::serverless-framework-deployments-*",
+        "arn:aws:s3:::serverless-framework-deployments-*/*"
+      ]
+    },
+    {
+      "Sid": "S3GlobalReads",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListAllMyBuckets",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Lambda",
+      "Effect": "Allow",
+      "Action": "lambda:*",
+      "Resource": [
+        "arn:aws:lambda:*:228619515491:function:voice-ai-backend-*",
+        "arn:aws:lambda:*:228619515491:layer:*"
+      ]
+    },
+    {
+      "Sid": "LambdaGlobalReads",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:ListFunctions",
+        "lambda:GetAccountSettings"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ProjectRolesOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:PassRole",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole"
+      ],
+      "Resource": "arn:aws:iam::228619515491:role/voice-ai-*"
+    },
+    {
+      "Sid": "Logs",
+      "Effect": "Allow",
+      "Action": "logs:*",
+      "Resource": "arn:aws:logs:*:228619515491:log-group:*"
+    },
+    {
+      "Sid": "HttpApi",
+      "Effect": "Allow",
+      "Action": "apigateway:*",
+      "Resource": [
+        "arn:aws:apigateway:*::/apis",
+        "arn:aws:apigateway:*::/apis/*",
+        "arn:aws:apigateway:*::/tags/*"
+      ]
+    },
+    {
+      "Sid": "DynamoDB",
+      "Effect": "Allow",
+      "Action": "dynamodb:*",
+      "Resource": [
+        "arn:aws:dynamodb:*:228619515491:table/voice-ai-transcriptions-*",
+        "arn:aws:dynamodb:*:228619515491:table/voice-ai-transcriptions-*/index/*"
+      ]
+    },
+    {
+      "Sid": "Cognito",
+      "Effect": "Allow",
+      "Action": "cognito-idp:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ScheduleRule",
+      "Effect": "Allow",
+      "Action": "events:*",
+      "Resource": "arn:aws:events:*:228619515491:rule/voice-ai-backend-*"
+    },
+    {
+      "Sid": "CloudFrontDistributions",
+      "Effect": "Allow",
+      "Action": "cloudfront:*",
+      "Resource": "arn:aws:cloudfront::228619515491:distribution/*"
+    },
+    {
+      "Sid": "CloudFrontAccountLevel",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:CreateOriginAccessControl",
+        "cloudfront:GetOriginAccessControl",
+        "cloudfront:GetOriginAccessControlConfig",
+        "cloudfront:UpdateOriginAccessControl",
+        "cloudfront:DeleteOriginAccessControl",
+        "cloudfront:ListOriginAccessControls",
+        "cloudfront:ListDistributions",
+        "cloudfront:GetCachePolicy",
+        "cloudfront:ListCachePolicies",
+        "cloudfront:GetResponseHeadersPolicy",
+        "cloudfront:ListResponseHeadersPolicies"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SpeechmaticsParameters",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:PutParameter",
+        "ssm:DeleteParameter",
+        "ssm:DescribeParameters",
+        "ssm:AddTagsToResource"
+      ],
+      "Resource": "arn:aws:ssm:*:228619515491:parameter/voice-ai/*"
+    }
+  ]
+}

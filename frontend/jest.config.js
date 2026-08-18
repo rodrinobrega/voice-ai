@@ -1,5 +1,5 @@
 /** @type {import('jest').Config} */
-module.exports = {
+export default {
   testEnvironment: 'jsdom',
   rootDir: '.',
   moduleFileExtensions: ['ts', 'js', 'vue', 'json'],

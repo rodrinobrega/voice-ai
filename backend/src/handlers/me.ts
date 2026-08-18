@@ -10,6 +10,9 @@ import { getCallerClaims, ok } from '../shared/http';
 import { errorMessage, logger } from '../shared/logger';
 import { MeResponseBody } from '../shared/types';
 
+// The Lambda handler contract is Promise-returning; this particular handler
+// has nothing to await (it only reads claims off the event).
+// eslint-disable-next-line @typescript-eslint/require-await
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {

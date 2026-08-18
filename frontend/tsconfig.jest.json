@@ -11,5 +11,7 @@
       "@/*": ["./*"],
       "#app": ["./test/mocks/nuxtApp.ts"]
     }
-  }
+  },
+  "//": "cypress.config.ts imports the `cypress` package, whose ambient types declare a chai-based global `expect`. Pulled into the Jest program it shadows @types/jest's matchers ('Property toBe does not exist on type Assertion'), so it is excluded here alongside the cypress/ directory.",
+  "exclude": ["node_modules", "dist", ".nuxt", ".output", "cypress", "cypress.config.ts"]
 }

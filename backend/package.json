@@ -1,7 +1,7 @@
 {
   "name": "voice-ai-backend",
   "version": "1.0.0",
-  "description": "Voice AI audio-transcription platform — serverless backend (AWS Lambda + DynamoDB + S3 + Cognito + Speechmatics).",
+  "description": "Voice AI audio-transcription platform \u2014 serverless backend (AWS Lambda + DynamoDB + S3 + Cognito + Speechmatics).",
   "private": true,
   "license": "UNLICENSED",
   "engines": {
@@ -43,6 +43,7 @@
     "prettier": "^3.3.2",
     "serverless": "^3.39.0",
     "serverless-esbuild": "^1.52.1",
+    "serverless-iam-roles-per-function": "^3.2.0",
     "serverless-offline": "^13.6.0",
     "ts-jest": "^29.1.4",
     "typescript": "^5.4.5"
